@@ -145,18 +145,36 @@ function addWhatsAppExif(
   return webp;
 }
 
-function buildScaleFilter(fit: "contain" | "cover", fps?: number): string {
+function buildScaleFilter(
+  fit: "contain" | "cover",
+  fps?: number,
+  detailSize = 512,
+): string {
   const parts: string[] = [];
   if (fps) {
     parts.push(`fps=${fps}`);
   }
+  const s = Math.min(512, Math.max(200, detailSize));
   if (fit === "cover") {
-    parts.push(
-      "scale=512:512:force_original_aspect_ratio=increase:flags=fast_bilinear",
-    );
-    parts.push("crop=512:512");
+    if (s < 512) {
+      parts.push(
+        `scale=${s}:${s}:force_original_aspect_ratio=increase:flags=fast_bilinear`,
+      );
+      parts.push(`crop=${s}:${s}`);
+      parts.push("scale=512:512:flags=fast_bilinear");
+    } else {
+      parts.push(
+        "scale=512:512:force_original_aspect_ratio=increase:flags=fast_bilinear",
+      );
+      parts.push("crop=512:512");
+    }
     parts.push("format=yuv420p");
   } else {
+    if (s < 512) {
+      parts.push(
+        `scale=${s}:${s}:force_original_aspect_ratio=decrease:flags=fast_bilinear`,
+      );
+    }
     parts.push(
       "scale=512:512:force_original_aspect_ratio=decrease:flags=fast_bilinear",
     );
@@ -208,17 +226,26 @@ export async function convertToSoundSticker(
       let passes = 0;
 
       if (animated) {
-        // Choose an optimal first-pass preset based on clip length so 95% of videos finish in 1 pass!
+        // Respect the user's chosen duration (up to 10s for animated WebP).
+        // For longer clips (>5.5s), lower FPS and internal detail resolution before upscaling to 512x512
+        // so the full 10s fits cleanly under WhatsApp's 500 KB animated sticker limit in 1 pass!
+        const targetDur = Math.min(duration, 10);
         const presets = effectiveVisualDur <= 2.5
           ? [
-            { fps: 12, q: 48, maxDur: Math.min(duration, 5) },
-            { fps: 9, q: 28, maxDur: Math.min(duration, 4.5) },
-            { fps: 6, q: 18, maxDur: Math.min(duration, 4) },
+            { fps: 12, q: 48, detailSize: 512, maxDur: targetDur },
+            { fps: 9, q: 28, detailSize: 420, maxDur: targetDur },
+            { fps: 7, q: 18, detailSize: 320, maxDur: targetDur },
+          ]
+          : effectiveVisualDur <= 5.5
+          ? [
+            { fps: 10, q: 38, detailSize: 512, maxDur: targetDur },
+            { fps: 8, q: 24, detailSize: 384, maxDur: targetDur },
+            { fps: 6, q: 16, detailSize: 300, maxDur: targetDur },
           ]
           : [
-            { fps: 10, q: 38, maxDur: Math.min(duration, 5.5) },
-            { fps: 8, q: 24, maxDur: Math.min(duration, 4.5) },
-            { fps: 6, q: 16, maxDur: Math.min(duration, 4) },
+            { fps: 7, q: 26, detailSize: 360, maxDur: targetDur },
+            { fps: 6, q: 20, detailSize: 300, maxDur: targetDur },
+            { fps: 5, q: 14, detailSize: 256, maxDur: targetDur },
           ];
 
         for (const preset of presets) {
@@ -235,7 +262,7 @@ export async function convertToSoundSticker(
             "-sn",
             "-dn",
             "-vf",
-            buildScaleFilter(opts.fit, preset.fps),
+            buildScaleFilter(opts.fit, preset.fps, preset.detailSize),
             "-c:v",
             "libwebp",
             "-lossless",
