@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Sound Sticker Studio — Solo para ti</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="studio-shell">
+      <header class="top-bar">
+        <button
+          id="btn-clear"
+          type="button"
+          class="icon-btn"
+          title="Limpiar selección"
+          aria-label="Limpiar selección"
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+            <path d="M18 6 6 18M6 6l12 12" />
+          </svg>
+        </button>
+
+        <button
+          id="btn-wa-status"
+          type="button"
+          class="status-pill"
+          data-state="disconnected"
+        >
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-label">Conectar WhatsApp</span>
+        </button>
+
+        <div class="top-actions">
+          <button
+            id="btn-options"
+            type="button"
+            class="icon-btn"
+            popovertarget="options-popover"
+            title="Opciones del sticker"
+            aria-label="Opciones del sticker"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              <circle cx="5" cy="12" r="2" />
+              <circle cx="12" cy="12" r="2" />
+              <circle cx="19" cy="12" r="2" />
+            </svg>
+          </button>
+
+          <button
+            id="btn-download"
+            type="button"
+            class="icon-btn"
+            title="Descargar WebP (sin audio)"
+            aria-label="Descargar archivo WebP"
+            disabled
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 4v12m0 0-4.5-4.5M12 16l4.5-4.5M5 20h14" />
+            </svg>
+          </button>
+
+          <button
+            id="btn-send"
+            type="button"
+            class="icon-btn primary-send"
+            title="Enviar sticker con audio a tu chat personal"
+            aria-label="Enviar sticker a tu WhatsApp"
+            disabled
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14m0 0-5.5-5.5M19 12l-5.5 5.5" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Settings popover -->
+      <div id="options-popover" popover class="options-panel">
+        <div class="options-header">
+          <h2>Ajustes del sticker</h2>
+          <button type="button" class="close-mini" popovertarget="options-popover" popovertargetaction="hide" aria-label="Cerrar ajustes">✕</button>
+        </div>
+
+        <label class="field">
+          <span>Encuadre (512×512)</span>
+          <select id="opt-fit">
+            <option value="contain" selected>Completo (fondo transparente)</option>
+            <option value="cover">Recorte cuadrado (llenar todo)</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Inicio del recorte (segundos)</span>
+          <input id="opt-start" type="number" min="0" max="600" step="0.5" value="0" />
+        </label>
+
+        <label class="field-row">
+          <input id="opt-include-audio" type="checkbox" checked />
+          <span>Incluir audio (del video o del archivo)</span>
+        </label>
+
+        <label class="field">
+          <span>Nombre del pack</span>
+          <input id="opt-pack" type="text" value="Mis Sound Stickers" maxlength="40" />
+        </label>
+
+        <label class="field">
+          <span>Autor</span>
+          <input id="opt-author" type="text" value="Sticker Studio" maxlength="40" />
+        </label>
+
+        <label class="field">
+          <span>Emoji asociado</span>
+          <input id="opt-emoji" type="text" value="🎵" maxlength="4" />
+        </label>
+      </div>
+
+      <!-- Main transparent checkered canvas -->
+      <section id="drop-zone" class="canvas-stage" tabindex="0" aria-label="Zona para elegir o arrastrar foto, GIF o video">
+        <input
+          id="visual-input"
+          type="file"
+          accept="image/*,video/*"
+          hidden
+        />
+
+        <div id="empty-prompt" class="pick-card">
+          <span class="plus-icon" aria-hidden="true">+</span>
+          <strong>Toca para elegir tu sticker</strong>
+          <span>Foto, GIF o video corto (o arrastra aquí)</span>
+        </div>
+
+        <div id="preview-wrap" class="preview-wrap" hidden>
+          <img id="preview-img" alt="Vista previa del sticker" hidden />
+          <video id="preview-video" controls loop playsinline hidden></video>
+          <div id="sound-badge" class="sound-badge" hidden>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <path d="M11 5 6 9H2v6h4l5 4V5zm4.5 3.2a5.5 5.5 0 0 1 0 7.6l1.4 1.4a7.5 7.5 0 0 0 0-10.4l-1.4 1.4z" />
+            </svg>
+            <span id="sound-badge-text">Con audio</span>
+          </div>
+          <button id="btn-change-visual" type="button" class="change-chip">
+            Cambiar archivo
+          </button>
+        </div>
+      </section>
+
+      <!-- Live feedback toast / banner -->
+      <div id="feedback-bar" class="feedback-bar" role="status" aria-live="polite" hidden></div>
+
+      <!-- Bottom audio & duration controls (matching user reference screenshot) -->
+      <footer class="bottom-bar">
+        <input
+          id="audio-input"
+          type="file"
+          accept="audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/aac,audio/x-m4a,.mp3,.m4a,.wav,.ogg"
+          hidden
+        />
+
+        <button id="btn-audio" type="button" class="audio-btn">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 18V5l12-2v13" />
+            <circle cx="6" cy="18" r="3" />
+            <circle cx="18" cy="16" r="3" />
+          </svg>
+          <span id="audio-label">Elegir audio (MP3, M4A, WAV)</span>
+        </button>
+
+        <button id="btn-clear-audio" type="button" class="clear-audio-btn" title="Quitar audio personalizado" aria-label="Quitar audio personalizado" hidden>
+          ✕
+        </button>
+
+        <div class="duration-toggle" role="group" aria-label="Duración máxima del audio">
+          <button type="button" class="dur-btn" data-sec="5">5s</button>
+          <button type="button" class="dur-btn active" data-sec="10">10s</button>
+        </div>
+      </footer>
+
+      <audio id="audio-preview" controls hidden class="audio-player"></audio>
+    </main>
+
+    <!-- Native modal dialog for WhatsApp connection (solo para ti) -->
+    <dialog id="wa-dialog" aria-labelledby="wa-dialog-title">
+      <div class="dialog-head">
+        <h2 id="wa-dialog-title">Conexión con tu WhatsApp</h2>
+        <form method="dialog">
+          <button type="submit" class="close-mini" aria-label="Cerrar">✕</button>
+        </form>
+      </div>
+
+      <p class="dialog-note" id="wa-mode-note">
+        <strong>Privacidad estricta:</strong> cada persona vincula su propia sesión temporal en memoria (no se guarda en disco), no lee chats ni responde en grupos y solo te envía el sticker a tu chat <em>"Mensajes contigo mismo"</em>.
+      </p>
+
+      <div id="wa-ttl-banner" class="ttl-banner" hidden></div>
+
+      <div id="wa-qr-box" class="qr-box" hidden>
+        <img id="wa-qr-img" alt="Código QR de WhatsApp" width="240" height="240" />
+        <p>En tu celular: <strong>WhatsApp → Menú → Dispositivos vinculados → Vincular dispositivo</strong></p>
+      </div>
+
+      <div id="wa-pairing-box" class="pairing-box" hidden>
+        <span>Tu código de vinculación:</span>
+        <strong id="wa-pairing-code"></strong>
+      </div>
+
+      <div id="wa-connected-box" class="connected-box" hidden>
+        <p>Conectado como <strong id="wa-self-name"></strong></p>
+        <small id="wa-self-jid"></small>
+      </div>
+
+      <div id="wa-error-box" class="error-box" hidden></div>
+
+      <div class="dialog-actions">
+        <button id="btn-wa-connect" type="button" class="btn-primary">Conectar (QR)</button>
+        <button id="btn-wa-disconnect" type="button" class="btn-secondary" hidden>Desconectar</button>
+        <button id="btn-wa-logout" type="button" class="btn-danger" hidden>Desvincular y borrar</button>
+      </div>
+
+      <details class="pairing-details">
+        <summary>¿Prefieres vincular con código de 8 dígitos en vez de QR?</summary>
+        <div class="pairing-form">
+          <input id="pairing-phone" type="tel" placeholder="Ej: 51999888777 (con código de país, sin +)" />
+          <button id="btn-wa-pairing" type="button" class="btn-secondary">Pedir código</button>
+        </div>
+      </details>
+
+      <details class="logs-details">
+        <summary>Ver registro técnico</summary>
+        <pre id="wa-logs"></pre>
+      </details>
+    </dialog>
+
+    <!-- Native modal dialog for optional group access code -->
+    <dialog id="access-dialog" aria-labelledby="access-dialog-title">
+      <div class="dialog-head">
+        <h2 id="access-dialog-title">Clave de acceso del grupo</h2>
+      </div>
+      <p class="dialog-note">
+        Este servidor está protegido con una clave privada para miembros del grupo.
+      </p>
+      <form id="access-form" class="access-form">
+        <input id="access-code-input" type="password" placeholder="Ingresa la clave del grupo" autocomplete="off" required />
+        <div id="access-error" class="error-box" hidden>Clave incorrecta. Intenta de nuevo.</div>
+        <button type="submit" class="btn-primary">Entrar</button>
+      </form>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

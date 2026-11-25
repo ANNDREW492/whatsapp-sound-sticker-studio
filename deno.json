@@ -1,0 +1,13 @@
+{
+  "nodeModulesDir": "auto",
+  "imports": {
+    "@whiskeysockets/baileys": "npm:@whiskeysockets/baileys@7.0.0-rc14",
+    "pino": "npm:pino@^9.6.0",
+    "qrcode": "npm:qrcode@^1.5.4",
+    "protobufjs": "npm:protobufjs@^7.4.0"
+  },
+  "tasks": {
+    "start": "deno run -A src/server.ts",
+    "verify": "deno check src/server.ts && deno run -A tests/verify.ts"
+  }
+}

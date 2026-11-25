@@ -1,0 +1,7 @@
+auth_info/
+node_modules/
+.git/
+*.log
+tests/
+iniciar.bat
+iniciar-compartido.bat
