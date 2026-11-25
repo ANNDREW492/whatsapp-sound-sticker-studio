@@ -1,5 +1,5 @@
 # WhatsApp Sound Sticker Studio
-
+https://whatsapp-sound-sticker-studio.onrender.com
 Herramienta web para crear **stickers con audio nativos de WhatsApp** (*Sound Stickers*) a partir de videos cortos, GIFs o fotos + archivos de audio (`MP3`, `M4A`, `WAV`, `OGG`) y enviarlos directamente a tu propio chat **"Mensajes contigo mismo" ("Tú")**.
 
 > Diseñado bajo el principio de **privacidad estricta**: no lee mensajes, no escucha grupos ni responde a terceros. Cada persona se envía los stickers únicamente a sí misma.
@@ -99,6 +99,3 @@ deno task verify
 
 ---
 
-## Aviso
-
-Este proyecto utiliza `@whiskeysockets/baileys` (implementación no oficial del protocolo de WhatsApp Web). Aunque el modo personal (*Mensajes contigo mismo*) evita spam e interacción con terceros, úsalo de forma responsable y nunca compartas la carpeta `auth_info/`.
