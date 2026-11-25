@@ -250,7 +250,11 @@ async function handleRequest(req: Request): Promise<Response> {
         } catch {
           // empty body is fine
         }
-        await session.connect(pairingPhone);
+        if (pairingPhone) {
+          await session.connectWithPairingCode(pairingPhone);
+        } else {
+          await session.connect();
+        }
         const status = await session.getStatus(
           sessionManager.getActiveSessionCount(),
         );

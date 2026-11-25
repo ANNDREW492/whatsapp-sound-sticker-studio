@@ -1,6 +1,7 @@
 import makeWASocket, {
   type AuthenticationCreds,
   type AuthenticationState,
+  Browsers,
   DisconnectReason,
   fetchLatestBaileysVersion,
   initAuthCreds,
@@ -119,6 +120,11 @@ export class PersonalWhatsAppSession {
   private memoryAuth: ReturnType<typeof createInMemoryAuthState> | null = null;
   private lastActivityAt = Date.now();
   private connectAttempts = 0;
+  private pendingPairingPhone: string | null = null;
+  private pairingWaiters: Array<{
+    resolve: (code: string) => void;
+    reject: (err: Error) => void;
+  }> = [];
 
   constructor(id: string, persistent: boolean) {
     this.id = id;
@@ -181,7 +187,82 @@ export class PersonalWhatsAppSession {
     };
   }
 
-  async connect(pairingPhone?: string): Promise<void> {
+  private resolvePairingWaiters(code: string) {
+    const waiters = this.pairingWaiters.splice(0);
+    for (const w of waiters) w.resolve(code);
+  }
+
+  private rejectPairingWaiters(err: Error) {
+    const waiters = this.pairingWaiters.splice(0);
+    for (const w of waiters) w.reject(err);
+  }
+
+  async connectWithPairingCode(phone: string): Promise<string> {
+    this.touch();
+    const cleaned = phone.replace(/\D/g, "");
+    if (cleaned.length < 8 || cleaned.length > 15) {
+      throw new Error(
+        "Número inválido. Escribe código de país + número sin +, ej: 51999888777",
+      );
+    }
+
+    if (this.state === "connected") {
+      throw new Error("Ya tienes una sesión de WhatsApp conectada.");
+    }
+
+    // If a socket is already open in QR stage (unregistered), request the pairing code immediately!
+    if (this.sock && this.state === "qr" && !this.pairingCode) {
+      this.log(`Solicitando código de vinculación para +${cleaned}...`);
+      try {
+        const code = await this.sock.requestPairingCode(cleaned);
+        this.pairingCode = code;
+        this.qrDataUrl = null;
+        this.lastError = null;
+        this.log(`Código de vinculación listo: ${code}`);
+        return code;
+      } catch (err) {
+        const e = err instanceof Error ? err : new Error(String(err));
+        this.lastError = `No se pudo generar el código: ${e.message}`;
+        this.log(this.lastError);
+        throw e;
+      }
+    }
+
+    // Otherwise start a clean fresh connection and wait for handshake ready (first QR tick)
+    await this.disconnect();
+    if (!this.persistent) {
+      await this.wipeCredentials();
+    }
+    this.connectAttempts = 0;
+    this.pendingPairingPhone = cleaned;
+
+    const codePromise = new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingPairingPhone = null;
+        reject(
+          new Error(
+            "Tiempo agotado esperando respuesta de WhatsApp. Intenta de nuevo.",
+          ),
+        );
+      }, 20_000);
+
+      this.pairingWaiters.push({
+        resolve: (code) => {
+          clearTimeout(timer);
+          resolve(code);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      });
+    });
+
+    void this.connect();
+    return await codePromise;
+  }
+
+  async connect(): Promise<void> {
     this.touch();
     if (this.sock && this.isActive()) {
       return;
@@ -214,7 +295,7 @@ export class PersonalWhatsAppSession {
         authState = res.state;
         saveCreds = res.saveCreds;
       } else {
-        // Reuse in-memory auth on mid-handshake reconnects (e.g. code 515 restart after QR scan)
+        // Reuse in-memory auth on mid-handshake reconnects (e.g. code 515 restart after QR/pairing)
         if (!this.memoryAuth) {
           this.memoryAuth = createInMemoryAuthState();
         }
@@ -229,7 +310,7 @@ export class PersonalWhatsAppSession {
         version,
         auth: authState,
         logger: pino({ level: "silent" }),
-        browser: ["Sound Sticker Studio", "Chrome", "1.0.0"],
+        browser: Browsers.ubuntu("Chrome"),
         syncFullHistory: false,
         markOnlineOnConnect: false,
         generateHighQualityLinkPreview: false,
@@ -238,35 +319,38 @@ export class PersonalWhatsAppSession {
       this.sock = sock;
       sock.ev.on("creds.update", saveCreds);
 
-      if (pairingPhone && !authState.creds.registered) {
-        const cleaned = pairingPhone.replace(/\D/g, "");
-        if (cleaned.length >= 8) {
-          setTimeout(async () => {
-            try {
-              if (this.sock !== sock) return;
-              const code = await sock.requestPairingCode(cleaned);
-              this.pairingCode = code;
-              this.log(`Código de vinculación listo: ${code}`);
-            } catch (err) {
-              this.lastError = `No se pudo generar código: ${(err as Error).message}`;
-              this.log(this.lastError);
-            }
-          }, 2500);
-        }
-      }
-
       sock.ev.on("connection.update", async (update) => {
         if (this.sock !== sock) return;
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
           this.state = "qr";
-          this.qrDataUrl = await QRCode.toDataURL(qr, {
-            width: 280,
-            margin: 2,
-            color: { dark: "#111b21", light: "#ffffff" },
-          });
-          this.log("QR listo. Escanéalo en WhatsApp → Dispositivos vinculados.");
+
+          if (this.pendingPairingPhone && !authState.creds.registered) {
+            const phoneToPair = this.pendingPairingPhone;
+            this.pendingPairingPhone = null;
+            this.log(`Solicitando código de vinculación para +${phoneToPair}...`);
+            try {
+              const code = await sock.requestPairingCode(phoneToPair);
+              this.pairingCode = code;
+              this.qrDataUrl = null;
+              this.lastError = null;
+              this.log(`Código de vinculación listo: ${code}`);
+              this.resolvePairingWaiters(code);
+            } catch (err) {
+              const e = err instanceof Error ? err : new Error(String(err));
+              this.lastError = `No se pudo generar el código: ${e.message}`;
+              this.log(this.lastError);
+              this.rejectPairingWaiters(e);
+            }
+          } else if (!this.pairingCode) {
+            this.qrDataUrl = await QRCode.toDataURL(qr, {
+              width: 280,
+              margin: 2,
+              color: { dark: "#111b21", light: "#ffffff" },
+            });
+            this.log("QR listo. Escanéalo en WhatsApp → Dispositivos vinculados.");
+          }
         }
 
         if (connection === "open") {
@@ -302,6 +386,7 @@ export class PersonalWhatsAppSession {
             this.selfName = null;
             this.lastError = "Sesión cerrada desde el teléfono. Vuelve a vincular.";
             this.log(this.lastError);
+            this.rejectPairingWaiters(new Error(this.lastError));
             await this.wipeCredentials();
           } else if (this.connectAttempts <= 4) {
             // Normal WA handshake restart (515) or transient disconnect
@@ -314,6 +399,7 @@ export class PersonalWhatsAppSession {
             this.state = "error";
             this.lastError = "No se pudo mantener la conexión. Intenta vincular de nuevo.";
             this.log(this.lastError);
+            this.rejectPairingWaiters(new Error(this.lastError));
             if (!this.persistent) {
               await this.wipeCredentials();
             }

@@ -33,6 +33,7 @@ const waQrBox = document.getElementById("wa-qr-box");
 const waQrImg = document.getElementById("wa-qr-img");
 const waPairingBox = document.getElementById("wa-pairing-box");
 const waPairingCode = document.getElementById("wa-pairing-code");
+const btnCopyPairing = document.getElementById("btn-copy-pairing");
 const waConnectedBox = document.getElementById("wa-connected-box");
 const waSelfName = document.getElementById("wa-self-name");
 const waSelfJid = document.getElementById("wa-self-jid");
@@ -359,17 +360,47 @@ btnWaConnect.addEventListener("click", async () => {
 
 btnWaPairing.addEventListener("click", async () => {
   const phone = pairingPhone.value.trim();
-  if (!phone) return;
-  const res = await apiFetch("/api/connect", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ pairingPhone: phone }),
-  });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    if (data.error) showFeedback(data.error, "err");
+  if (!phone) {
+    waErrorBox.textContent = "Escribe tu número con código de país (sin +), ej: 51999888777";
+    waErrorBox.hidden = false;
+    return;
   }
-  pollStatus();
+  btnWaPairing.disabled = true;
+  btnWaPairing.textContent = "Generando...";
+  waErrorBox.hidden = true;
+  try {
+    const res = await apiFetch("/api/connect", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pairingPhone: phone }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      waErrorBox.textContent = data.error || "No se pudo generar el código.";
+      waErrorBox.hidden = false;
+    }
+  } catch (err) {
+    waErrorBox.textContent = err.message || "Error de red generando código.";
+    waErrorBox.hidden = false;
+  } finally {
+    btnWaPairing.disabled = false;
+    btnWaPairing.textContent = "Pedir código";
+    pollStatus();
+  }
+});
+
+btnCopyPairing.addEventListener("click", async () => {
+  const raw = waPairingCode.dataset.raw || waPairingCode.textContent.replace(/-/g, "");
+  if (!raw) return;
+  try {
+    await navigator.clipboard.writeText(raw);
+    btnCopyPairing.textContent = "¡Copiado!";
+    setTimeout(() => {
+      btnCopyPairing.textContent = "Copiar código";
+    }, 1800);
+  } catch {
+    btnCopyPairing.textContent = "Cópialo manualmente arriba";
+  }
 });
 
 btnWaDisconnect.addEventListener("click", async () => {
@@ -420,11 +451,17 @@ async function pollStatus() {
       }
     }
 
-    waQrBox.hidden = !(s.state === "qr" && s.qrDataUrl);
+    waQrBox.hidden = !(s.state === "qr" && s.qrDataUrl && !s.pairingCode);
     if (s.qrDataUrl) waQrImg.src = s.qrDataUrl;
 
     waPairingBox.hidden = !s.pairingCode;
-    if (s.pairingCode) waPairingCode.textContent = s.pairingCode;
+    if (s.pairingCode) {
+      waPairingCode.dataset.raw = s.pairingCode;
+      waPairingCode.textContent =
+        s.pairingCode.length === 8
+          ? `${s.pairingCode.slice(0, 4)}-${s.pairingCode.slice(4)}`
+          : s.pairingCode;
+    }
 
     waConnectedBox.hidden = s.state !== "connected";
     if (s.state === "connected") {
