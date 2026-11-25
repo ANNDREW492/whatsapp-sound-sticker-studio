@@ -310,7 +310,9 @@ async function handleRequest(req: Request): Promise<Response> {
           );
         }
         const { converted, emoji } = await parseStickerForm(req);
+        const tSend = performance.now();
         const sent = await session.sendStickerToSelf(converted, emoji);
+        const sendMs = Math.round(performance.now() - tSend);
 
         return jsonResponse(
           {
@@ -324,6 +326,9 @@ async function handleRequest(req: Request): Promise<Response> {
               ? Math.round((converted.audioSizeBytes / 1024) * 10) / 10
               : 0,
             audioDurationSec: converted.audioDurationSec ?? 0,
+            convertMs: converted.convertMs,
+            sendMs,
+            webpPasses: converted.webpPasses,
           },
           200,
           cookieHeaderObj,

@@ -334,9 +334,10 @@ btnSend.addEventListener("click", async () => {
     if (!res.ok || !data.ok) {
       throw new Error(data.error || "Error enviando sticker");
     }
+    const totalSec = (((data.convertMs || 0) + (data.sendMs || 0)) / 1000).toFixed(1);
     const msg = data.withAudio
-      ? `¡Listo! Sticker con audio enviado a tu chat "Tú" (WebP ${data.webpSizeKB} KB + Audio ${data.audioSizeKB} KB, ${data.audioDurationSec}s).`
-      : `¡Listo! Sticker enviado a tu chat "Tú" (WebP ${data.webpSizeKB} KB, sin audio).`;
+      ? `¡Listo en ${totalSec}s! Sticker con audio enviado a tu chat "Tú" (WebP ${data.webpSizeKB} KB + Audio ${data.audioSizeKB} KB, ${data.audioDurationSec}s).`
+      : `¡Listo en ${totalSec}s! Sticker enviado a tu chat "Tú" (WebP ${data.webpSizeKB} KB, sin audio).`;
     showFeedback(msg, "ok");
   } catch (err) {
     showFeedback(`Error: ${err.message}`, "err");

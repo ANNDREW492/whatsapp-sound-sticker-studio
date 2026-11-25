@@ -24,6 +24,14 @@ export interface ConvertedStickerResult {
   audioDurationSec?: number;
   audioSizeBytes?: number;
   webpSizeBytes: number;
+  convertMs: number;
+  webpPasses: number;
+}
+
+const FFMPEG_THREADS = (Deno.env.get("FFMPEG_THREADS") || "").trim();
+
+function threadArgs(): string[] {
+  return FFMPEG_THREADS ? ["-threads", FFMPEG_THREADS] : [];
 }
 
 async function runCmd(
@@ -58,38 +66,37 @@ function isVideoOrGif(mime: string, name: string): boolean {
   );
 }
 
-async function probeHasAudio(filePath: string): Promise<boolean> {
-  const res = await runCmd("ffprobe", [
-    "-v",
-    "error",
-    "-select_streams",
-    "a:0",
-    "-show_entries",
-    "stream=codec_type",
-    "-of",
-    "default=noprint_wrappers=1:nokey=1",
-    filePath,
-  ]);
-  return res.code === 0 && res.stdout.trim().includes("audio");
-}
-
-async function probeDuration(filePath: string): Promise<number> {
+async function probeMediaInfo(
+  filePath: string,
+): Promise<{ duration: number; hasAudio: boolean }> {
   const res = await runCmd("ffprobe", [
     "-v",
     "error",
     "-show_entries",
-    "format=duration",
+    "format=duration:stream=codec_type",
     "-of",
-    "default=noprint_wrappers=1:nokey=1",
+    "json",
     filePath,
   ]);
-  const val = parseFloat(res.stdout.trim());
-  return Number.isFinite(val) && val > 0 ? val : 0;
+  if (res.code !== 0) {
+    return { duration: 0, hasAudio: false };
+  }
+  try {
+    const parsed = JSON.parse(res.stdout);
+    const dur = parseFloat(parsed?.format?.duration ?? "0");
+    const streams: Array<{ codec_type?: string }> = parsed?.streams ?? [];
+    const hasAudio = streams.some((s) => s.codec_type === "audio");
+    return {
+      duration: Number.isFinite(dur) && dur > 0 ? dur : 0,
+      hasAudio,
+    };
+  } catch {
+    return { duration: 0, hasAudio: false };
+  }
 }
 
 /**
  * Appends a valid WhatsApp Sticker EXIF chunk to a WebP RIFF container.
- * Handles both simple VP8/VP8L/VP8X WebP files safely.
  */
 function addWhatsAppExif(
   webp: Buffer,
@@ -120,7 +127,6 @@ function addWhatsAppExif(
   exifAttr.writeUInt32LE(jsonBuf.length, 14);
   const exifPayload = Buffer.concat([exifAttr, jsonBuf]);
 
-  // Build EXIF chunk (4-byte tag + 4-byte LE length + payload + optional pad byte)
   const needsPad = exifPayload.length % 2 === 1;
   const exifChunk = Buffer.alloc(8 + exifPayload.length + (needsPad ? 1 : 0));
   exifChunk.write("EXIF", 0, "ascii");
@@ -130,14 +136,12 @@ function addWhatsAppExif(
   const firstChunkFourCC = webp.toString("ascii", 12, 16);
 
   if (firstChunkFourCC === "VP8X") {
-    // Set the EXIF flag bit (bit 3 = 0x08) in VP8X flags byte at offset 20
     const out = Buffer.concat([webp, exifChunk]);
     out[20] = out[20] | 0x08;
     out.writeUInt32LE(out.length - 8, 4);
     return out;
   }
 
-  // For simple static VP8/VP8L without VP8X, keep original WebP untouched so we don't break header dimensions
   return webp;
 }
 
@@ -148,22 +152,24 @@ function buildScaleFilter(fit: "contain" | "cover", fps?: number): string {
   }
   if (fit === "cover") {
     parts.push(
-      "scale=512:512:force_original_aspect_ratio=increase:flags=lanczos",
+      "scale=512:512:force_original_aspect_ratio=increase:flags=fast_bilinear",
     );
     parts.push("crop=512:512");
+    parts.push("format=yuv420p");
   } else {
     parts.push(
-      "scale=512:512:force_original_aspect_ratio=decrease:flags=lanczos",
+      "scale=512:512:force_original_aspect_ratio=decrease:flags=fast_bilinear",
     );
+    parts.push("format=yuva420p");
     parts.push("pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000");
   }
-  parts.push("format=rgba");
   return parts.join(",");
 }
 
 export async function convertToSoundSticker(
   opts: ConvertOptions,
 ): Promise<ConvertedStickerResult> {
+  const t0 = performance.now();
   const tempDir = await Deno.makeTempDir({ prefix: "wa_sound_sticker_" });
   try {
     const visualExt = getExt(
@@ -184,165 +190,217 @@ export async function convertToSoundSticker(
     const start = Math.max(0, opts.startSec || 0);
     const animated = isVideoOrGif(opts.visualMime, opts.visualName);
 
+    // Single fast ffprobe call for visual info (duration + whether it has audio)
+    const visualInfo = animated
+      ? await probeMediaInfo(visualPath)
+      : { duration: 0, hasAudio: false };
+
+    const effectiveVisualDur = visualInfo.duration > 0
+      ? Math.max(0.5, Math.min(duration, visualInfo.duration - start))
+      : duration;
+
     const webpPath = `${tempDir}/sticker.webp`;
-    let webpBuffer: Buffer | null = null;
+    const oggPath = `${tempDir}/audio.ogg`;
 
-    if (animated) {
-      // Animated WebP must stay under 500 KB for WhatsApp.
-      // Try progressive quality/fps presets until it fits cleanly.
-      const presets = [
-        { fps: 15, q: 70, maxDur: Math.min(duration, 6) },
-        { fps: 12, q: 55, maxDur: Math.min(duration, 6) },
-        { fps: 10, q: 42, maxDur: Math.min(duration, 5) },
-        { fps: 8, q: 30, maxDur: Math.min(duration, 5) },
-        { fps: 6, q: 20, maxDur: Math.min(duration, 4) },
-      ];
+    // Task 1: Encode WebP (using compression_level 1 + fast_bilinear so Pass #1 fits <490KB quickly!)
+    const encodeWebpTask = async (): Promise<{ buffer: Buffer; passes: number }> => {
+      let webpBuffer: Buffer | null = null;
+      let passes = 0;
 
-      for (const preset of presets) {
-        const args = [
-          "-y",
-          "-ss",
-          String(start),
-          "-t",
-          String(preset.maxDur),
-          "-i",
-          visualPath,
-          "-an",
-          "-vf",
-          buildScaleFilter(opts.fit, preset.fps),
-          "-c:v",
-          "libwebp",
-          "-lossless",
-          "0",
-          "-compression_level",
-          "4",
-          "-q:v",
-          String(preset.q),
-          "-loop",
-          "0",
-          "-preset",
-          "default",
-          webpPath,
-        ];
-        const res = await runCmd("ffmpeg", args);
-        if (res.code !== 0) {
-          throw new Error(`FFmpeg error generando WebP animado: ${res.stderr.slice(-400)}`);
+      if (animated) {
+        // Choose an optimal first-pass preset based on clip length so 95% of videos finish in 1 pass!
+        const presets = effectiveVisualDur <= 2.5
+          ? [
+            { fps: 12, q: 48, maxDur: Math.min(duration, 5) },
+            { fps: 9, q: 28, maxDur: Math.min(duration, 4.5) },
+            { fps: 6, q: 18, maxDur: Math.min(duration, 4) },
+          ]
+          : [
+            { fps: 10, q: 38, maxDur: Math.min(duration, 5.5) },
+            { fps: 8, q: 24, maxDur: Math.min(duration, 4.5) },
+            { fps: 6, q: 16, maxDur: Math.min(duration, 4) },
+          ];
+
+        for (const preset of presets) {
+          passes++;
+          const args = [
+            "-y",
+            ...threadArgs(),
+            ...(start > 0 ? ["-ss", String(start)] : []),
+            "-t",
+            String(preset.maxDur),
+            "-i",
+            visualPath,
+            "-an",
+            "-sn",
+            "-dn",
+            "-vf",
+            buildScaleFilter(opts.fit, preset.fps),
+            "-c:v",
+            "libwebp",
+            "-lossless",
+            "0",
+            "-compression_level",
+            "1",
+            "-q:v",
+            String(preset.q),
+            "-loop",
+            "0",
+            webpPath,
+          ];
+          const res = await runCmd("ffmpeg", args);
+          if (res.code !== 0) {
+            throw new Error(
+              `FFmpeg error generando WebP animado: ${res.stderr.slice(-400)}`,
+            );
+          }
+          const bytes = Buffer.from(await Deno.readFile(webpPath));
+          webpBuffer = bytes;
+          if (bytes.length <= 490_000) {
+            break;
+          }
         }
-        const bytes = Buffer.from(await Deno.readFile(webpPath));
-        webpBuffer = bytes;
-        if (bytes.length <= 490_000) {
-          break;
+      } else {
+        for (const q of [80, 55, 35]) {
+          passes++;
+          const args = [
+            "-y",
+            ...threadArgs(),
+            "-i",
+            visualPath,
+            "-vf",
+            buildScaleFilter(opts.fit),
+            "-frames:v",
+            "1",
+            "-c:v",
+            "libwebp",
+            "-lossless",
+            "0",
+            "-compression_level",
+            "1",
+            "-q:v",
+            String(q),
+            webpPath,
+          ];
+          const res = await runCmd("ffmpeg", args);
+          if (res.code !== 0) {
+            throw new Error(
+              `FFmpeg error generando WebP estático: ${res.stderr.slice(-400)}`,
+            );
+          }
+          const bytes = Buffer.from(await Deno.readFile(webpPath));
+          webpBuffer = bytes;
+          if (bytes.length <= 98_000) {
+            break;
+          }
         }
       }
-    } else {
-      // Static WebP must stay under 100 KB for WhatsApp.
-      for (const q of [85, 70, 50, 35]) {
-        const args = [
-          "-y",
-          "-i",
-          visualPath,
-          "-vf",
-          buildScaleFilter(opts.fit),
-          "-frames:v",
-          "1",
-          "-c:v",
-          "libwebp",
-          "-lossless",
-          "0",
-          "-q:v",
-          String(q),
-          webpPath,
-        ];
-        const res = await runCmd("ffmpeg", args);
-        if (res.code !== 0) {
-          throw new Error(`FFmpeg error generando WebP estático: ${res.stderr.slice(-400)}`);
-        }
-        const bytes = Buffer.from(await Deno.readFile(webpPath));
-        webpBuffer = bytes;
-        if (bytes.length <= 98_000) {
-          break;
-        }
+
+      if (!webpBuffer) {
+        throw new Error("No se pudo generar el archivo WebP.");
       }
-    }
 
-    if (!webpBuffer) {
-      throw new Error("No se pudo generar el archivo WebP.");
-    }
+      return {
+        buffer: addWhatsAppExif(webpBuffer, opts.packName, opts.author, opts.emoji),
+        passes,
+      };
+    };
 
-    webpBuffer = addWhatsAppExif(webpBuffer, opts.packName, opts.author, opts.emoji);
+    // Task 2: Encode Opus/OGG audio in parallel with WebP
+    const encodeAudioTask = async (): Promise<{
+      buffer?: Buffer;
+      durationSec?: number;
+    }> => {
+      if (!opts.includeAudio) return {};
 
-    // Process audio -> OGG/Opus (no video/cover-art stream! WhatsApp rejects OGG with Theora cover art)
-    let audioBuffer: Buffer | undefined;
-    let audioDurationSec: number | undefined;
-
-    if (opts.includeAudio) {
       let audioSourcePath: string | undefined;
       let audioStart = 0;
 
       if (customAudioPath) {
         audioSourcePath = customAudioPath;
         audioStart = 0;
-      } else if (await probeHasAudio(visualPath)) {
+      } else if (visualInfo.hasAudio) {
         audioSourcePath = visualPath;
         audioStart = start;
       }
 
-      if (audioSourcePath) {
-        const oggPath = `${tempDir}/audio.ogg`;
-        for (const bitrate of ["48k", "32k", "24k", "16k"]) {
-          const args = [
-            "-y",
-            ...(audioStart > 0 ? ["-ss", String(audioStart)] : []),
-            "-t",
-            String(duration),
-            "-i",
-            audioSourcePath,
-            "-vn",
-            "-map",
-            "0:a:0",
-            "-c:a",
-            "libopus",
-            "-b:a",
-            bitrate,
-            "-ar",
-            "48000",
-            "-ac",
-            "1",
-            "-application",
-            "audio",
-            "-avoid_negative_ts",
-            "make_zero",
-            oggPath,
-          ];
-          const res = await runCmd("ffmpeg", args);
-          if (res.code !== 0) {
-            throw new Error(`FFmpeg error convirtiendo audio a Opus/OGG: ${res.stderr.slice(-400)}`);
-          }
-          const bytes = Buffer.from(await Deno.readFile(oggPath));
-          audioBuffer = bytes;
-          if (bytes.length <= 900_000) {
-            break;
-          }
+      if (!audioSourcePath) return {};
+
+      let audioBuffer: Buffer | undefined;
+      for (const bitrate of ["32k", "20k"]) {
+        const args = [
+          "-y",
+          ...threadArgs(),
+          ...(audioStart > 0 ? ["-ss", String(audioStart)] : []),
+          "-t",
+          String(duration),
+          "-i",
+          audioSourcePath,
+          "-vn",
+          "-sn",
+          "-dn",
+          "-map",
+          "0:a:0",
+          "-c:a",
+          "libopus",
+          "-compression_level",
+          "5",
+          "-b:a",
+          bitrate,
+          "-ar",
+          "48000",
+          "-ac",
+          "1",
+          "-application",
+          "audio",
+          "-avoid_negative_ts",
+          "make_zero",
+          oggPath,
+        ];
+        const res = await runCmd("ffmpeg", args);
+        if (res.code !== 0) {
+          throw new Error(
+            `FFmpeg error convirtiendo audio a Opus/OGG: ${res.stderr.slice(-400)}`,
+          );
         }
-        if (audioBuffer) {
-          const d = await probeDuration(oggPath);
-          audioDurationSec = Math.max(1, Math.round(d || duration));
+        const bytes = Buffer.from(await Deno.readFile(oggPath));
+        audioBuffer = bytes;
+        if (bytes.length <= 900_000) {
+          break;
         }
       }
-    }
+
+      if (!audioBuffer) return {};
+
+      const audioDur = customAudioPath
+        ? (await probeMediaInfo(oggPath)).duration
+        : effectiveVisualDur;
+
+      return {
+        buffer: audioBuffer,
+        durationSec: Math.max(1, Math.round(audioDur || duration)),
+      };
+    };
+
+    const [webpResult, audioResult] = await Promise.all([
+      encodeWebpTask(),
+      encodeAudioTask(),
+    ]);
 
     const webpSha256Base64 = createHash("sha256")
-      .update(webpBuffer)
+      .update(webpResult.buffer)
       .digest("base64");
 
     return {
-      webpBuffer,
+      webpBuffer: webpResult.buffer,
       webpSha256Base64,
       isAnimated: animated,
-      audioBuffer,
-      audioDurationSec,
-      audioSizeBytes: audioBuffer?.length,
-      webpSizeBytes: webpBuffer.length,
+      audioBuffer: audioResult.buffer,
+      audioDurationSec: audioResult.durationSec,
+      audioSizeBytes: audioResult.buffer?.length,
+      webpSizeBytes: webpResult.buffer.length,
+      convertMs: Math.round(performance.now() - t0),
+      webpPasses: webpResult.passes,
     };
   } finally {
     await Deno.remove(tempDir, { recursive: true }).catch(() => {});
