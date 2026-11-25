@@ -60,9 +60,17 @@ let audioObjectUrl = null;
 let waState = "disconnected";
 let busy = false;
 let accessCode = sessionStorage.getItem("sticker_access_code") || "";
+let clientSessionId = sessionStorage.getItem("sticker_client_sid");
+if (!clientSessionId) {
+  clientSessionId =
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
+  sessionStorage.setItem("sticker_client_sid", clientSessionId);
+}
 
 function apiHeaders(extra = {}) {
-  const headers = { ...extra };
+  const headers = { "x-session-id": clientSessionId, ...extra };
   if (accessCode) {
     headers["x-access-code"] = accessCode;
   }

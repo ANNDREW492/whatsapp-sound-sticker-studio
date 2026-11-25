@@ -225,9 +225,12 @@
       <details class="pairing-details">
         <summary>¿Prefieres vincular con código de 8 dígitos en vez de QR?</summary>
         <div class="pairing-form">
-          <input id="pairing-phone" type="tel" placeholder="Ej: 51999888777 (con código de país, sin +)" />
+          <input id="pairing-phone" type="tel" placeholder="Ej: 51999888777 (país + número, sin +)" />
           <button id="btn-wa-pairing" type="button" class="btn-secondary">Pedir código</button>
         </div>
+        <p class="dialog-note" style="margin-top: 8px; font-size: 0.78rem;">
+          Incluye el código de país sin <code>+</code> ni <code>0</code> delante (Argentina: <code>549...</code>). Abre la web en Chrome/Safari y verifica no tener ya 4 dispositivos vinculados en WhatsApp.
+        </p>
       </details>
 
       <details class="logs-details">

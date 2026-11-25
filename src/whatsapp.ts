@@ -199,10 +199,13 @@ export class PersonalWhatsAppSession {
 
   async connectWithPairingCode(phone: string): Promise<string> {
     this.touch();
-    const cleaned = phone.replace(/\D/g, "");
-    if (cleaned.length < 8 || cleaned.length > 15) {
+    let cleaned = phone.replace(/\D/g, "");
+    if (cleaned.startsWith("00")) {
+      cleaned = cleaned.slice(2);
+    }
+    if (cleaned.length < 10 || cleaned.length > 15) {
       throw new Error(
-        "Número inválido. Escribe código de país + número sin +, ej: 51999888777",
+        "Número inválido. Incluye código de país + tu número sin + ni ceros delante (ej: 51999888777, 5491112345678).",
       );
     }
 
@@ -210,25 +213,7 @@ export class PersonalWhatsAppSession {
       throw new Error("Ya tienes una sesión de WhatsApp conectada.");
     }
 
-    // If a socket is already open in QR stage (unregistered), request the pairing code immediately!
-    if (this.sock && this.state === "qr" && !this.pairingCode) {
-      this.log(`Solicitando código de vinculación para +${cleaned}...`);
-      try {
-        const code = await this.sock.requestPairingCode(cleaned);
-        this.pairingCode = code;
-        this.qrDataUrl = null;
-        this.lastError = null;
-        this.log(`Código de vinculación listo: ${code}`);
-        return code;
-      } catch (err) {
-        const e = err instanceof Error ? err : new Error(String(err));
-        this.lastError = `No se pudo generar el código: ${e.message}`;
-        this.log(this.lastError);
-        throw e;
-      }
-    }
-
-    // Otherwise start a clean fresh connection and wait for handshake ready (first QR tick)
+    // Always open a brand-new socket for pairing code so we never inherit an aging QR timeout!
     await this.disconnect();
     if (!this.persistent) {
       await this.wipeCredentials();
@@ -311,6 +296,7 @@ export class PersonalWhatsAppSession {
         auth: authState,
         logger: pino({ level: "silent" }),
         browser: Browsers.ubuntu("Chrome"),
+        qrTimeout: 60_000,
         syncFullHistory: false,
         markOnlineOnConnect: false,
         generateHighQualityLinkPreview: false,
@@ -372,6 +358,7 @@ export class PersonalWhatsAppSession {
             lastDisconnect?.error as { output?: { statusCode?: number } } | undefined
           )?.output?.statusCode;
           const loggedOut = statusCode === DisconnectReason.loggedOut;
+          const restartRequired = statusCode === DisconnectReason.restartRequired;
           this.sock = null;
           this.qrDataUrl = null;
 
@@ -388,8 +375,15 @@ export class PersonalWhatsAppSession {
             this.log(this.lastError);
             this.rejectPairingWaiters(new Error(this.lastError));
             await this.wipeCredentials();
+          } else if (restartRequired) {
+            // Mandatory post-pairing stream restart (code 515) — never count against retries!
+            this.connectAttempts = 0;
+            this.state = "connecting";
+            this.log("Vinculación aceptada. Completando conexión (515)...");
+            this.reconnectTimer = setTimeout(() => {
+              this.connect();
+            }, 500) as unknown as number;
           } else if (this.connectAttempts <= 4) {
-            // Normal WA handshake restart (515) or transient disconnect
             this.state = "connecting";
             this.log(`Reconectando (código ${statusCode ?? "?"})...`);
             this.reconnectTimer = setTimeout(() => {

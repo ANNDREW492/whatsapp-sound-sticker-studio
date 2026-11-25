@@ -60,9 +60,14 @@ function getOrIssueSessionId(req: Request): {
   setCookieHeader?: string;
 } {
   const cookies = parseCookies(req);
-  const existing = cookies["wa_sid"];
-  if (existing && /^[a-f0-9-]{16,64}$/i.test(existing)) {
-    return { sessionId: existing };
+  const fromCookie = cookies["wa_sid"];
+  if (fromCookie && /^[a-f0-9-]{16,64}$/i.test(fromCookie)) {
+    return { sessionId: fromCookie };
+  }
+  // Fallback header for mobile in-app browsers that strip/drop cookies
+  const fromHeader = (req.headers.get("x-session-id") || "").trim();
+  if (fromHeader && /^[a-f0-9-]{16,64}$/i.test(fromHeader)) {
+    return { sessionId: fromHeader };
   }
   const sessionId = crypto.randomUUID();
   const isHttps =
