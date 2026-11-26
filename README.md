@@ -3,31 +3,22 @@ https://whatsapp-sound-sticker-studio.onrender.com
 
 Herramienta web para crear **stickers con audio en WhatsApp** a partir de videos cortos (`MP3`, `M4A`, `WAV`, `OGG`) y enviarlos directamente a tu propio chat personal
 
-> Diseñado bajo el principio de **privacidad estricta**: no lee mensajes, no escucha grupos ni responde a terceros. Cada persona se envía los stickers únicamente a sí misma.
+> Fué diseñado bajo el principio de **privacidad estricta**: no lee mensajes, no escucha grupos ni responde a terceros. Cada persona se envía los stickers únicamente a sí misma.
 
----
-
-## Características
-
-- **Stickers con audio nativos (`audioStickerMessage` / campo 134):** Genera el WebP `512×512` (estático o animado) + pista de audio `audio/ogg; codecs=opus` sin metadatos de carátula y los empaqueta en el formato nativo de WhatsApp mediante un parche limpio sobre `WAProto` en `@whiskeysockets/baileys`.
-- **Dos modos de funcionamiento:**
-  1. **Modo Multi-sesión efímera (por defecto — ideal para compartir con tu grupo):** Cada visitante recibe una cookie `HttpOnly` aislada, vincula su propio WhatsApp por QR o código de 8 dígitos en **memoria RAM** (cero credenciales en disco), se envía sus stickers a sí mismo y su sesión se desvincula y borra automáticamente al cerrar sesión o tras inactividad (`SESSION_TTL_MIN`).
-  2. **Modo Local personal (`PERSIST_LOCAL_SESSION=true`):** Guarda tu sesión únicamente en `./auth_info/` para no tener que escanear el QR cada vez en tu propia computadora.
-- **Editor visual oscuro:** Arrastra o elige foto/GIF/video, agrega audio personalizado o usa el audio original del video, elige duración (`5s` / `10s`), encuadre (`contain` con transparencia o `cover` cuadrado), segundo de inicio, nombre de pack, autor y emoji.
-- **Protección para servidores compartidos:** Clave de acceso opcional del grupo (`ACCESS_CODE`), límite de sesiones simultáneas (`MAX_SESSIONS`) y cola de concurrencia para FFmpeg (`MAX_CONCURRENT_FFMPEG`).
-
----
 
 ## Requisitos
 
 - [Deno](https://deno.com/) 2.x
 - [FFmpeg](https://ffmpeg.org/) (incluyendo `ffprobe`) disponible en el `PATH`
-
+en el powershell puedes simplemente copiar:
+winget install DenoLand.Deno
+winget install Gyan.FFmpeg
 ---
+y ya les funcionará el archivo .bat
 
-## Uso rápido
+## TUTORIAL RAPIDO
 
-### 1. En tu propia PC (solo para ti)
+### 1. En tu propia PC
 En Windows, haz doble clic en `iniciar.bat` o ejecuta:
 
 ```powershell
@@ -39,7 +30,7 @@ Abre `http://127.0.0.1:3000`, haz clic en **Conectar WhatsApp**, escanea el QR y
 
 ### 2. Compartido con miembros de tu grupo (Modo Multi-sesión efímera)
 
-#### Opción A — Desde tu PC por horarios con Cloudflare Tunnel (gratis)
+#### Opción A — Desde tu PC por horarios con Cloudflare Tunnel (también gratis)
 1. Inicia el servidor en modo multi-sesión (puedes ponerle una clave para tu grupo):
    ```powershell
    $env:PERSIST_LOCAL_SESSION="false"
