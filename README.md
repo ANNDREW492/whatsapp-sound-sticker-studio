@@ -11,8 +11,10 @@ Herramienta web para crear **stickers con audio en WhatsApp** a partir de videos
 - [Deno](https://deno.com/) 2.x
 - [FFmpeg](https://ffmpeg.org/) (incluyendo `ffprobe`) disponible en el `PATH`
 en el powershell puedes simplemente copiar:
+```powershell
 winget install DenoLand.Deno
 winget install Gyan.FFmpeg
+```
 ---
 y ya les funcionará el archivo .bat
 
